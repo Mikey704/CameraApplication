@@ -1,0 +1,209 @@
+package com.example.cameraapptest;
+
+
+
+import android.Manifest;
+import android.content.ContentValues;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.ImageFormat;
+import android.graphics.SurfaceTexture;
+import android.media.Image;
+import android.media.ImageReader;
+import android.os.Bundle;
+import android.provider.MediaStore;
+import android.util.Size;
+import android.view.Surface;
+import android.view.TextureView;
+import android.view.View;
+import android.widget.Button;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+
+import android.hardware.camera2.*;
+
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.text.SimpleDateFormat;
+import java.util.Collections;
+import java.util.Date;
+import java.util.Locale;
+
+public class MainActivity extends AppCompatActivity {
+
+    private TextureView textureView;
+    private CameraDevice cameraDevice;
+    private CaptureRequest.Builder previewRequestBuilder;
+    private CameraCaptureSession cameraCaptureSession;
+    private ImageReader imageReader;
+
+    private static final int CAMERA_REQUEST_CODE = 101;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        textureView = findViewById(R.id.textureView);
+        Button captureButton = findViewById(R.id.captureButton);
+
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED ||
+                ActivityCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE}, CAMERA_REQUEST_CODE);
+            return;
+        }
+
+        textureView.setSurfaceTextureListener(surfaceTextureListener);
+
+        captureButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                captureImage();
+            }
+        });
+    }
+
+    private final TextureView.SurfaceTextureListener surfaceTextureListener = new TextureView.SurfaceTextureListener() {
+        @Override
+        public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
+            openCamera();
+        }
+
+        @Override
+        public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {}
+
+        @Override
+        public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
+            return false;
+        }
+
+        @Override
+        public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {}
+    };
+
+    private void openCamera() {
+        CameraManager cameraManager = (CameraManager) getSystemService(CAMERA_SERVICE);
+        try {
+            String cameraId = cameraManager.getCameraIdList()[0];
+            CameraCharacteristics cameraCharacteristics = cameraManager.getCameraCharacteristics(cameraId);
+            Size[] jpegSizes = cameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP).getOutputSizes(ImageFormat.JPEG);
+            Size imageSize = jpegSizes[0];
+
+            imageReader = ImageReader.newInstance(imageSize.getWidth(), imageSize.getHeight(), ImageFormat.JPEG, 1);
+            imageReader.setOnImageAvailableListener(imageAvailableListener, null);
+
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                cameraManager.openCamera(cameraId, cameraDeviceStateCallback, null);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private final CameraDevice.StateCallback cameraDeviceStateCallback = new CameraDevice.StateCallback() {
+        @Override
+        public void onOpened(@NonNull CameraDevice camera) {
+            cameraDevice = camera;
+            startPreview();
+        }
+
+        @Override
+        public void onDisconnected(@NonNull CameraDevice camera) {
+            camera.close();
+        }
+
+        @Override
+        public void onError(@NonNull CameraDevice camera, int error) {
+            camera.close();
+        }
+    };
+
+    private void startPreview() {
+        try {
+            SurfaceTexture surfaceTexture = textureView.getSurfaceTexture();
+            surfaceTexture.setDefaultBufferSize(textureView.getWidth(), textureView.getHeight());
+            Surface previewSurface = new Surface(surfaceTexture);
+
+            previewRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            previewRequestBuilder.addTarget(previewSurface);
+
+            cameraDevice.createCaptureSession(Collections.singletonList(previewSurface), new CameraCaptureSession.StateCallback() {
+                @Override
+                public void onConfigured(@NonNull CameraCaptureSession session) {
+                    cameraCaptureSession = session;
+                    try {
+                        cameraCaptureSession.setRepeatingRequest(previewRequestBuilder.build(), null, null);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+
+                @Override
+                public void onConfigureFailed(@NonNull CameraCaptureSession session) {
+                    Toast.makeText(MainActivity.this, "Camera configuration failed", Toast.LENGTH_SHORT).show();
+                }
+            }, null);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private final ImageReader.OnImageAvailableListener imageAvailableListener = new ImageReader.OnImageAvailableListener() {
+        @Override
+        public void onImageAvailable(ImageReader reader) {
+            Image image = null;
+            try {
+                image = reader.acquireLatestImage();
+                ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+                byte[] bytes = new byte[buffer.remaining()];
+                buffer.get(bytes);
+
+                saveImage(bytes);
+            } catch (Exception e) {
+                e.printStackTrace();
+            } finally {
+                if (image != null) {
+                    image.close();
+                }
+            }
+        }
+    };
+
+    private void saveImage(byte[] bytes) {
+        try {
+            String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Images.Media.DISPLAY_NAME, "IMG_" + timestamp + ".jpg");
+            values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+            values.put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera");
+
+
+
+            Toast.makeText(this, "Image saved", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void captureImage() {
+        try {
+            CaptureRequest.Builder captureBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+            captureBuilder.addTarget(imageReader.getSurface());
+            cameraCaptureSession.capture(captureBuilder.build(), null, null);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (cameraDevice != null) {
+            cameraDevice.close();
+        }
+    }
+}
